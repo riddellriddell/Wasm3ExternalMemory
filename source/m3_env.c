@@ -1228,6 +1228,36 @@ uint32_t  m3_GetMemorySize  (IM3Runtime i_runtime)
 }
 
 
+uint8_t *  m3_SetMemory  (IM3Runtime i_runtime, void * i_buffer, uint32_t i_bufferSize, uint32_t i_pageSize)
+{
+    M3Memory * memory = & i_runtime->memory;
+
+    if (i_pageSize == 0)
+        i_pageSize = d_m3DefaultMemPageSize;
+
+    size_t headerSize = sizeof (M3MemoryHeader);
+    size_t minSize = headerSize + i_pageSize;
+
+    if (i_bufferSize < minSize)
+        return NULL;
+
+    memory->mallocated = (M3MemoryHeader *) i_buffer;
+    memory->mallocated->runtime = i_runtime;
+    memory->mallocated->maxStack = (m3slot_t *) i_runtime->stack + i_runtime->numStackSlots;
+    memory->mallocated->length = i_bufferSize - headerSize;
+
+    memory->numPages = (i_bufferSize - headerSize) / i_pageSize;
+    memory->pageSize = i_pageSize;
+    memory->isExternalMemory = true;
+
+# if d_m3LogRuntime
+    m3log (runtime, "set external memory: buffer: %p; size: %u; pages: %u", i_buffer, i_bufferSize, memory->numPages);
+# endif
+
+    return m3MemData (memory->mallocated);
+}
+
+
 M3BacktraceInfo *  m3_GetBacktrace  (IM3Runtime i_runtime)
 {
 # if d_m3RecordBacktraces

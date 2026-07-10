@@ -232,6 +232,11 @@ d_m3ErrorConst  (trapStackOverflow,             "[trap] stack overflow")
     // This is used internally by Raw Function helpers
     uint32_t            m3_GetMemorySize            (IM3Runtime             i_runtime);
 
+    uint8_t *           m3_SetMemory                (IM3Runtime             i_runtime,
+                                                     void *                 i_buffer,
+                                                     uint32_t               i_bufferSize,
+                                                     uint32_t               i_pageSize);
+
     void *              m3_GetUserData              (IM3Runtime             i_runtime);
 
 
