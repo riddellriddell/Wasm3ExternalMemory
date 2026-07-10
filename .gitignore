@@ -2,6 +2,7 @@
 /source-*
 /.toolchains
 test/.spec-*
+.spec-opam-*/
 test/*.log
 test/tailcall/*.S
 node_modules/
