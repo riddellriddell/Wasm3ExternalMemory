@@ -122,6 +122,7 @@ This project uses capability-tiered model allocation so the level of model effor
 - `Design.md`, `Milestones.md`, and the goals files are authoritative and maintained.
 - `ImplementationPlans/*.md` contains active task plans and phase handovers.
 - `AgentThinking.md` is temporary and should stay lightweight.
+- `BuildAndTestGuide.md` contains verified build and test instructions for the project. Consult this before attempting to build or run tests.
 - Wiki and reference material may become stale and should be checked against the source of truth.
 
 ---
@@ -136,6 +137,7 @@ When assigned work in this repository:
    - `Design.md`
    - `Milestones.md` when scope or roadmap matters
    - the relevant goals file
+   - `BuildAndTestGuide.md` when building, testing, or verifying changes
    - `AgentThinking.md` only when explicitly needed
 3. If a Tier 4 implementation plan exists for the task, follow it closely.
 4. Keep repository structure, naming, and documentation conventions consistent.
