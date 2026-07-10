@@ -10,7 +10,7 @@ repo: "your-repo"
 
 - Task Type: `GOAL`
 - Task Name: Add `isExternalMemory` Flag to M3Memory
-- Status: `Draft`
+- Status: `Complete`
 - Owner: "Your Name"
 - Last Updated: 2026-07-11
 
@@ -128,14 +128,14 @@ Adding a field to `M3Memory` increases its size. Since `M3Memory` is embedded in
 
 ## Completion Checklist
 
-- [ ] `isExternalMemory` field added to `M3Memory` struct in `m3_env.h`
-- [ ] Field defaults to `false` after `m3_NewRuntime`
-- [ ] Existing code compiles without warnings
-- [ ] All existing tests pass
-- [ ] Implementation matches the linked design and goal context
-- [ ] Scope stayed within this plan
-- [ ] Verification steps were completed
-- [ ] Relevant status docs were updated (goals1.md checkbox)
+- [x] `isExternalMemory` field added to `M3Memory` struct in `m3_env.h`
+- [x] Field defaults to `false` after `m3_NewRuntime`
+- [x] Existing code compiles without warnings
+- [x] All existing tests pass
+- [x] Implementation matches the linked design and goal context
+- [x] Scope stayed within this plan
+- [x] Verification steps were completed
+- [x] Relevant status docs were updated (goals1.md checkbox)
 
 ## Notes for the Implementing Agent
 

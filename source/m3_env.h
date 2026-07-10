@@ -33,6 +33,8 @@ typedef struct M3Memory
     u32                     numPages;
     u32                     maxPages;
     u32                     pageSize;
+
+    bool                    isExternalMemory;
 }
 M3Memory;
 

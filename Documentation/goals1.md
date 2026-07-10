@@ -103,10 +103,10 @@ repo: "your-repo"
 
 #### Acceptance Criteria
 
-- [ ] `M3Memory` struct contains `isExternalMemory` field
-- [ ] Field defaults to `false` after `m3_NewRuntime`
-- [ ] Existing code compiles without warnings
-- [ ] All existing tests pass
+- [x] `M3Memory` struct contains `isExternalMemory` field
+- [x] Field defaults to `false` after `m3_NewRuntime`
+- [x] Existing code compiles without warnings
+- [x] All existing tests pass
 
 #### Out of Scope
 
