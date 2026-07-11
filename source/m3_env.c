@@ -235,7 +235,15 @@ void  Runtime_Release  (IM3Runtime i_runtime)
     Environment_ReleaseCodePages (i_runtime->environment, i_runtime->pagesFull);
 
     m3_Free (i_runtime->originStack);
-    m3_Free (i_runtime->memory.mallocated);
+
+    if (i_runtime->memory.isExternalMemory)
+    {
+        i_runtime->memory.mallocated = NULL;
+    }
+    else
+    {
+        m3_Free (i_runtime->memory.mallocated);
+    }
 }
 
 
@@ -368,7 +376,11 @@ M3Result  ResizeMemory  (IM3Runtime io_runtime, u32 i_numPages)
     i_numPagesToAlloc = 256;
 #endif
 
-    if (numPagesToAlloc <= memory->maxPages)
+    if (memory->isExternalMemory)
+    {
+        _throwif ("external memory cannot be resized", numPagesToAlloc > memory->numPages);
+    }
+    else if (numPagesToAlloc <= memory->maxPages)
     {
         size_t numPageBytes = numPagesToAlloc * io_runtime->memory.pageSize;
 
@@ -396,7 +408,7 @@ M3Result  ResizeMemory  (IM3Runtime io_runtime, u32 i_numPages)
         M3MemoryHeader * oldMallocated = memory->mallocated;
 # endif
 
-        memory->numPages = numPagesToAlloc;
+        memory->numPages = numPageBytes / io_runtime->memory.pageSize;
 
         memory->mallocated->length =  numPageBytes;
         memory->mallocated->runtime = io_runtime;
