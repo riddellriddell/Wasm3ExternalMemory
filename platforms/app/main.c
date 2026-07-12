@@ -44,6 +44,8 @@ static IM3Runtime runtime;
 static u8* wasm_bins[MAX_MODULES];
 static int wasm_bins_qty = 0;
 
+static void* externalMemBuf = NULL;
+
 #if defined(GAS_LIMIT)
 
 static int64_t initial_gas = GAS_FACTOR * GAS_LIMIT;
@@ -462,19 +464,38 @@ void repl_free  ()
         runtime = NULL;
     }
 
+    if (externalMemBuf) {
+        free (externalMemBuf);
+        externalMemBuf = NULL;
+    }
+
     for (int i = 0; i < wasm_bins_qty; i++) {
         free (wasm_bins[i]);
         wasm_bins[i] = NULL;
     }
 }
 
-M3Result repl_init  (unsigned stack)
+M3Result repl_init  (unsigned stack, uint32_t externalMemSize)
 {
     repl_free();
     runtime = m3_NewRuntime (env, stack, NULL);
     if (runtime == NULL) {
         return "m3_NewRuntime failed";
     }
+
+    if (externalMemSize > 0) {
+        externalMemBuf = malloc (externalMemSize);
+        if (!externalMemBuf) {
+            return "failed to allocate external memory";
+        }
+        uint8_t* data = m3_SetMemory (runtime, externalMemBuf, externalMemSize, 0);
+        if (!data) {
+            free (externalMemBuf);
+            externalMemBuf = NULL;
+            return "m3_SetMemory failed";
+        }
+    }
+
     return m3Err_none;
 }
 
@@ -554,6 +575,7 @@ void print_usage() {
     puts("  --compile             disable lazy compilation");
     puts("  --dump-on-trap        dump wasm memory");
     puts("  --gas-limit           set gas limit");
+    puts("  --external-mem <size> external memory size in bytes (uses m3_SetMemory)");
 }
 
 #define ARGV_SHIFT()  { i_argc--; i_argv++; }
@@ -571,6 +593,7 @@ int  main  (int i_argc, const char* i_argv[])
     const char* argFile = NULL;
     const char* argFunc = "_start";
     unsigned argStackSize = 64*1024;
+    uint32_t argExternalMem = 0;
 
 //    m3_PrintM3Info ();
 
@@ -602,6 +625,10 @@ int  main  (int i_argc, const char* i_argv[])
             const char* tmp = "0";
             ARGV_SET(tmp);
             initial_gas = current_gas = GAS_FACTOR * atol(tmp);
+        } else if (!strcmp("--external-mem", arg)) {
+            const char* tmp = "0";
+            ARGV_SET(tmp);
+            argExternalMem = atol(tmp);
         } else if (!strcmp("--dir", arg)) {
             const char* argDir;
             ARGV_SET(argDir);
@@ -620,7 +647,7 @@ int  main  (int i_argc, const char* i_argv[])
 
     ARGV_SET(argFile);
 
-    result = repl_init(argStackSize);
+    result = repl_init(argStackSize, argExternalMem);
     if (result) FATAL("repl_init: %s", result);
 
     if (argFile) {
@@ -656,6 +683,7 @@ int  main  (int i_argc, const char* i_argv[])
         fprintf(stdout, "wasm3> ");
         fflush(stdout);
         if (!fgets(cmd_buff, sizeof(cmd_buff), stdin)) {
+            repl_free();
             return 0;
         }
         int argc = split_argv(cmd_buff, argv);
@@ -664,7 +692,7 @@ int  main  (int i_argc, const char* i_argv[])
         }
         result = m3Err_none;
         if (!strcmp(":init", argv[0])) {
-            result = repl_init(argStackSize);
+            result = repl_init(argStackSize, 0);
         } else if (!strcmp(":version", argv[0])) {
             print_version();
         } else if (!strcmp(":exit", argv[0])) {
@@ -719,7 +747,7 @@ _onfatal:
         fprintf (stderr, "\n");
     }
 
-    m3_FreeRuntime (runtime);
+    repl_free ();
     m3_FreeEnvironment (env);
 
     return result ? 1 : 0;
