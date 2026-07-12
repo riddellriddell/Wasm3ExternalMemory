@@ -27,28 +27,31 @@ repo: "your-repo"
 | Goal 1.1 – Add `isExternalMemory` Flag | Not Started | [Jump to details](#goal-1-1) |
 | Goal 1.2 – Implement `m3_SetMemory` API | Not Started | [Jump to details](#goal-1-2) |
 | Goal 1.3 – Guard Existing Memory Functions | Not Started | [Jump to details](#goal-1-3) |
-| Goal 1.4 – Write Unit Tests | Not Started | [Jump to details](#goal-1-4) |
-| Goal 1.5 – Verify Backward Compatibility | Not Started | [Jump to details](#goal-1-5) |
+| Goal 1.4 – Add `--external-mem` CLI Argument | Not Started | [Jump to details](#goal-1-4) |
+| Goal 1.5 – Dual-Pass Test Execution | Not Started | [Jump to details](#goal-1-5) |
 
 **Milestone Status:** Not Started — 0/5 goals complete.
 
 ### Milestone 1 Scope
 
-**Intent:** Ship a public `m3_SetMemory` API that lets callers provide externally-owned linear memory buffers to wasm3, with proper lifecycle management and full test coverage.
+**Intent:** Ship a public `m3_SetMemory` API that lets callers provide externally-owned linear memory buffers to wasm3, with proper lifecycle management, a CLI flag for exercising the feature, and dual-pass test coverage.
 
 **What this milestone means:**
 
 - wasm3 can accept caller-provided memory buffers via a new public API
 - Externally-provided buffers are not freed or reallocated by wasm3
 - The existing internal memory path remains unchanged and fully functional
+- The `wasm3` CLI app supports `--external-mem <size>` to exercise the external memory path
+- The Python test suites run two passes (internal + external memory) to verify correctness
 
 **Key deliverables:**
 
 - `isExternalMemory` flag in `M3Memory` struct
 - `m3_SetMemory` function declared in `wasm3.h` and implemented in `m3_env.c`
 - Guards in `ResizeMemory` and `Runtime_Release` for external memory
-- Unit tests covering all new code paths
-- All existing tests pass with no regressions
+- `--external-mem <size>` CLI argument in `platforms/app/main.c`
+- Dual-pass execution in `test/run-spec-test.py` and `test/run-wasi-test.py`
+- All tests pass in both internal and external memory modes
 
 ### Explicitly Out of Scope (Milestone 1)
 
@@ -147,7 +150,7 @@ repo: "your-repo"
 #### Out of Scope
 
 - Guards for `ResizeMemory` and `Runtime_Release` (Goal 1.3)
-- Tests (Goal 1.4)
+- CLI and test integration (Goals 1.4, 1.5)
 
 ---
 
@@ -178,77 +181,74 @@ repo: "your-repo"
 
 #### Out of Scope
 
-- Tests for guards (Goal 1.4)
+- CLI and test integration (Goals 1.4, 1.5)
 - Multi-instance scenarios (Milestone 2)
 
 ---
 
 <a id="goal-1-4"></a>
 
-### Goal 1.4 – Write Unit Tests
+### Goal 1.4 – Add `--external-mem` CLI Argument
 
-**Intent:** Create comprehensive tests covering all new external memory code paths.
+**Intent:** Add a `--external-mem <size>` command-line argument to the wasm3 app (`platforms/app/main.c`) that allocates an external memory buffer of the specified size and injects it into the runtime via `m3_SetMemory`, exercising the external memory path from Goal 1.2.
 
 #### Deliverables
 
-- **Deliverable 1:** Test for `m3_SetMemory` basic operation
-  - Installs buffer correctly
-  - Header fields populated correctly
-  - Returns data pointer
-- **Deliverable 2:** Test for `m3_LoadModule` after `m3_SetMemory`
-  - Data segments copied into external buffer
-  - Memory contents match expected state
-- **Deliverable 3:** Test for `ResizeMemory` when external
-  - Returns error or validates size without realloc
-  - Rejects oversized requests
-- **Deliverable 4:** Test for `Runtime_Release` when external
-  - Does not call `m3_Free` on external buffer
-  - Buffer remains valid after runtime release
-- **Deliverable 5:** End-to-end rollback test
-  - Buffer swap + re-run scenario works
-  - State is correctly restored
+- **Deliverable 1:** `--external-mem <size>` argument parsed in `main.c` arg loop
+- **Deliverable 2:** `repl_init` modified to accept `externalMemSize` parameter, call `malloc` + `m3_SetMemory` when non-zero
+- **Deliverable 3:** `externalMemBuf` static variable tracked and freed in `repl_free`
+- **Deliverable 4:** `print_usage` updated with new flag description
+- **Deliverable 5:** All existing `repl_init` call sites updated
 
 #### Acceptance Criteria
 
-- [ ] All 5 test scenarios above have corresponding test code
-- [ ] Tests compile and run via CMake test infrastructure
-- [ ] All new tests pass
-- [ ] Tests are in `test/` or `platforms/app/` per project conventions
+- [ ] `wasm3 --external-mem 1048576 file.wasm` runs without error
+- [ ] `wasm3 --external-mem 1048576 --repl file.wasm` enters REPL with external memory active
+- [ ] Buffer is allocated via `malloc` and freed on exit (no leaks)
+- [ ] `m3_SetMemory` receives correct buffer size and returns valid data pointer
+- [ ] Module load (`repl_load`) succeeds after external memory injection
+- [ ] Wasm execution produces correct results with external memory
+- [ ] Without `--external-mem`, behavior is identical to current (no regressions)
+- [ ] `print_usage` shows the new flag
 
 #### Out of Scope
 
-- Performance/stress testing
-- Multi-instance testing (Milestone 2)
+- Python test integration (Goal 1.5)
+- Multi-instance scenarios (Milestone 2)
+
+> **Implementation details:** See [GOAL_1_4_add_external_mem_cli_arg.md](ImplementationPlans/GOAL_1_4_add_external_mem_cli_arg.md)
 
 ---
 
 <a id="goal-1-5"></a>
 
-### Goal 1.5 – Verify Backward Compatibility
+### Goal 1.5 – Dual-Pass Test Execution
 
-**Intent:** Confirm that all existing tests pass unchanged after the external memory feature is implemented.
+**Intent:** Modify the Python test scripts (`test/run-spec-test.py` and `test/run-wasi-test.py`) to support running each test suite in two modes: once with internal memory (baseline) and once with external memory (via `--external-mem`). Both passes must produce identical results, verifying functional equivalence.
 
 #### Deliverables
 
-- **Deliverable 1:** Full test suite run
-  - Build project via CMake
-  - Run all test executables in `test/` and `platforms/app/`
-  - Record results
-- **Deliverable 2:** Regression report
-  - Document any failures (expected: none)
-  - Confirm zero regressions
+- **Deliverable 1:** `--external-mem <size>` argument added to `run-spec-test.py`
+- **Deliverable 2:** `--external-mem <size>` argument added to `run-wasi-test.py`
+- **Deliverable 3:** `--dual-pass` flag added to both scripts
+- **Deliverable 4:** Both scripts correctly inject `--external-mem` into the wasm3 command
+- **Deliverable 5:** Dual-pass mode compares results and fails on mismatch
 
 #### Acceptance Criteria
 
-- [ ] Project builds cleanly with no new warnings
-- [ ] All existing tests pass
-- [ ] No changes to existing test files required
-- [ ] Internal memory path (`isExternalMemory == false`) behaves identically to pre-feature state
+- [ ] `run-spec-test.py --external-mem 1048576` runs all spec tests with external memory
+- [ ] `run-spec-test.py --dual-pass` runs two passes and reports matching results
+- [ ] `run-wasi-test.py --external-mem 1048576` runs all WASI tests with external memory
+- [ ] `run-wasi-test.py --dual-pass` runs two passes and reports matching results
+- [ ] Without `--external-mem` or `--dual-pass`, scripts behave identically to current
+- [ ] A failure in either pass is reported with clear diagnostic output
 
 #### Out of Scope
 
-- New tests for external memory (Goal 1.4)
-- Performance regression testing
+- Adding new test cases (tests are the existing spec + WASI suites)
+- Modifying the wasm3 binary beyond what Goal 1.4 provides
+
+> **Implementation details:** See [GOAL_1_5_dual_pass_test_execution.md](ImplementationPlans/GOAL_1_5_dual_pass_test_execution.md)
 
 ---
 
@@ -286,6 +286,11 @@ repo: "your-repo"
 - **Purpose:** Build system
 - **Status:** Active (existing dependency)
 
+### Python 3
+
+- **Purpose:** Test runner scripts (`run-spec-test.py`, `run-wasi-test.py`)
+- **Status:** Active (existing dependency, used for dual-pass testing in Goal 1.5)
+
 ---
 
 ## Agent Guidelines for This Milestone
@@ -297,13 +302,15 @@ When working on tasks in this milestone, anchor them to the **goals** above.
 - `isExternalMemory` flag → `m3_env.h` (struct definition)
 - `m3_SetMemory` → `wasm3.h` (declaration), `m3_env.c` (implementation)
 - Guards → `m3_env.c` ( `ResizeMemory`, `Runtime_Release` )
-- Tests → `test/` or `platforms/app/`
+- `--external-mem` CLI arg → `platforms/app/main.c` (arg parsing, `repl_init`, `repl_free`)
+- Python test dual-pass → `test/run-spec-test.py`, `test/run-wasi-test.py`
 
 ### Development Approach
 
 - Implement goals sequentially: 1.1 → 1.2 → 1.3 → 1.4 → 1.5
 - Each goal should compile and pass existing tests before moving to the next
 - Run `cmake --build` and test suite after each goal
+- Goal 1.4 must be complete before Goal 1.5 can be tested
 
 ### Rules Compliance
 
