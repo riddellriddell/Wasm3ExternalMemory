@@ -57,9 +57,17 @@ parser.add_argument("--show-logs", action="store_true")
 parser.add_argument("--format", choices=["raw", "hex", "fp"], default="fp")
 parser.add_argument("-v", "--verbose", action="store_true")
 parser.add_argument("-s", "--silent", action="store_true")
+parser.add_argument("--external-mem", metavar="<size>", type=int, default=0,
+                    help="Run with external memory of given size (bytes)")
+parser.add_argument("--dual-pass", action="store_true",
+                    help="Run tests twice: once without --external-mem, once with")
 parser.add_argument("file", nargs='*')
 
 args = parser.parse_args()
+
+exec_cmd = args.exec
+if args.external_mem > 0:
+    exec_cmd += f" --external-mem {args.external_mem}"
 
 if args.line:
     args.show_logs = True
@@ -328,272 +336,298 @@ def combineResults(values):
 # Actual test
 #
 
-wasm3 = Wasm3(args.exec)
+def run_test_pass(exec_cmd):
+    wasm3 = Wasm3(exec_cmd)
 
-wasm3_ver = wasm3.version()
-print(wasm3_ver)
+    wasm3_ver = wasm3.version()
+    print(wasm3_ver)
 
-blacklist = Blacklist([
-  "float_exprs.wast:* f32.nonarithmetic_nan_bitpattern*",
-  "imports.wast:*",
-  "names.wast:* *.wasm \\x00*", # names that start with '\0'
-])
-
-if wasm3_ver in Blacklist(["* on i386* MSVC *", "* on i386* Clang * for Windows"]):
-    warning("Win32 x86 has i64->f32 conversion precision issues, skipping some tests", True)
-    # See: https://docs.microsoft.com/en-us/cpp/c-runtime-library/floating-point-support
-    blacklist.add([
-      "conversions.wast:* f32.convert_i64_u(9007199791611905)",
-      "conversions.wast:* f32.convert_i64_u(9223371761976868863)",
-      "conversions.wast:* f32.convert_i64_u(9223372586610589697)",
-      "conversions.wast:* i64.trunc_f64_u(4895412794951729151)",
-      "conversions.wast:* i64.trunc_sat_f64_u(4895412794951729151)",
-    ])
-elif wasm3_ver in Blacklist(["* on mips* GCC *"]):
-    warning("MIPS has NaN representation issues, skipping some tests", True)
-    blacklist.add([
-      "float_exprs.wast:* *_nan_bitpattern(*",
-      "float_exprs.wast:* *no_fold_*",
-    ])
-elif wasm3_ver in Blacklist(["* on sparc* GCC *"]):
-    warning("SPARC has NaN representation issues, skipping some tests", True)
-    blacklist.add([
-      "float_exprs.wast:* *.canonical_nan_bitpattern(0, 0)",
+    blacklist = Blacklist([
+      "float_exprs.wast:* f32.nonarithmetic_nan_bitpattern*",
+      "imports.wast:*",
+      "names.wast:* *.wasm \\x00*", # names that start with '\0'
     ])
 
-stats = dotdict(total_run=0, skipped=0, failed=0, crashed=0, timeout=0,  success=0, missing=0)
+    if wasm3_ver in Blacklist(["* on i386* MSVC *", "* on i386* Clang * for Windows"]):
+        warning("Win32 x86 has i64->f32 conversion precision issues, skipping some tests", True)
+        blacklist.add([
+          "conversions.wast:* f32.convert_i64_u(9007199791611905)",
+          "conversions.wast:* f32.convert_i64_u(9223371761976868863)",
+          "conversions.wast:* f32.convert_i64_u(9223372586610589697)",
+          "conversions.wast:* i64.trunc_f64_u(4895412794951729151)",
+          "conversions.wast:* i64.trunc_sat_f64_u(4895412794951729151)",
+        ])
+    elif wasm3_ver in Blacklist(["* on mips* GCC *"]):
+        warning("MIPS has NaN representation issues, skipping some tests", True)
+        blacklist.add([
+          "float_exprs.wast:* *_nan_bitpattern(*",
+          "float_exprs.wast:* *no_fold_*",
+        ])
+    elif wasm3_ver in Blacklist(["* on sparc* GCC *"]):
+        warning("SPARC has NaN representation issues, skipping some tests", True)
+        blacklist.add([
+          "float_exprs.wast:* *.canonical_nan_bitpattern(0, 0)",
+        ])
 
-# Convert some trap names from the original spec
-trapmap = {
-  "unreachable": "unreachable executed"
-}
+    stats = dotdict(total_run=0, skipped=0, failed=0, crashed=0, timeout=0,  success=0, missing=0)
+    failed_tests = []
 
-def runInvoke(test):
-    test.cmd = [test.action.field]
+    trapmap = {
+      "unreachable": "unreachable executed"
+    }
 
-    displayArgs = []
-    for arg in test.action.args:
-        test.cmd.append(arg['value'])
-        displayArgs.append(formatValue(arg['value'], arg['type']))
+    def runInvoke(test):
+        test.cmd = [test.action.field]
 
-    test_id = f"{test.source} {test.wasm} {test.cmd[0]}({', '.join(test.cmd[1:])})"
-    if test_id in blacklist and not args.all:
-        warning(f"Skipped {test_id} (blacklisted)")
-        stats.skipped += 1
-        return
+        displayArgs = []
+        for arg in test.action.args:
+            test.cmd.append(arg['value'])
+            displayArgs.append(formatValue(arg['value'], arg['type']))
 
-    if args.verbose:
-        print(f"Running {test_id}")
-
-    stats.total_run += 1
-
-    output = ""
-    actual = None
-    actual_val = None
-    force_fail = False
-
-    try:
-        output = wasm3.invoke(test.cmd)
-    except Exception as e:
-        actual = f"<{e}>"
-        force_fail = True
-
-    # Parse the actual output
-    if not actual:
-        result = re.findall(r'Result: (.*?)$', "\n" + output + "\n", re.MULTILINE)
-        if len(result) > 0:
-            actual = "result " + result[-1]
-            actual_val = result[0]
-    if not actual:
-        result = re.findall(r'Error: \[trap\] (.*?) \(', "\n" + output + "\n", re.MULTILINE)
-        if len(result) > 0:
-            actual = "trap " + result[-1]
-    if not actual:
-        result = re.findall(r'Error: (.*?)$', "\n" + output + "\n", re.MULTILINE)
-        if len(result) > 0:
-            actual = "error " + result[-1]
-    if not actual:
-        actual = "<No Result>"
-        force_fail = True
-
-    if actual == "error no operation ()":
-        actual = "<Not Implemented>"
-        stats.missing += 1
-        force_fail = True
-    elif actual == "<Crashed>":
-        stats.crashed += 1
-        force_fail = True
-    elif actual == "<Timeout>":
-        stats.timeout += 1
-        force_fail = True
-
-    # Prepare the expected result
-    expect = None
-    if "expected" in test:
-        if len(test.expected) == 0:
-            expect = "result <Empty Stack>"
-        else:
-            if actual_val is not None:
-                actual = "result " + combineResults(parseResults(actual_val))
-            expect = "result " + combineResults(normalizeResults(test.expected))
-
-    elif "expected_trap" in test:
-        if test.expected_trap in trapmap:
-            test.expected_trap = trapmap[test.expected_trap]
-
-        expect = "trap " + str(test.expected_trap)
-    elif "expected_anything" in test:
-        expect = "<Anything>"
-    else:
-        expect = "<Unknown>"
-
-    def showTestResult():
-        print(" ----------------------")
-        print(f"Test:     {ansi.HEADER}{test_id}{ansi.ENDC}")
-        print(f"Args:     {', '.join(displayArgs)}")
-        print(f"Expected: {ansi.OKGREEN}{expect}{ansi.ENDC}")
-        print(f"Actual:   {ansi.WARNING}{actual}{ansi.ENDC}")
-        if args.show_logs and len(output):
-            print(f"Log:")
-            print(output)
-
-    log.write(f"{test.source}\t|\t{test.wasm} {test.action.field}({', '.join(displayArgs)})\t=>\t\t")
-    if actual == expect or (expect == "<Anything>" and not force_fail):
-        stats.success += 1
-        log.write(f"OK: {actual}\n")
-        if args.line:
-            showTestResult()
-    else:
-        stats.failed += 1
-        log.write(f"FAIL: {actual}, should be: {expect}\n")
-        if args.silent:
+        test_id = f"{test.source} {test.wasm} {test.cmd[0]}({', '.join(test.cmd[1:])})"
+        if test_id in blacklist and not args.all:
+            warning(f"Skipped {test_id} (blacklisted)")
+            stats.skipped += 1
             return
 
-        showTestResult()
-        #sys.exit(1)
+        if args.verbose:
+            print(f"Running {test_id}")
 
-if args.file:
-    jsonFiles = args.file
-else:
-    jsonFiles  = glob.glob(os.path.join(spec_dir, "core", "*.json"))
-    jsonFiles += glob.glob(os.path.join(spec_dir, "proposals", "sign-extension-ops", "*.json"))
-    jsonFiles += glob.glob(os.path.join(spec_dir, "proposals", "nontrapping-float-to-int-conversions", "*.json"))
+        stats.total_run += 1
 
-jsonFiles = list(map(lambda x: os.path.relpath(x, scriptDir), jsonFiles))
-jsonFiles.sort()
+        output = ""
+        actual = None
+        actual_val = None
+        force_fail = False
 
-for fn in jsonFiles:
-    with open(fn, encoding='utf-8') as f:
-        data = json.load(f)
+        try:
+            output = wasm3.invoke(test.cmd)
+        except Exception as e:
+            actual = f"<{e}>"
+            force_fail = True
 
-    wast_source = filename(data["source_filename"])
-    wasm_module = ""
+        if not actual:
+            result = re.findall(r'Result: (.*?)$', "\n" + output + "\n", re.MULTILINE)
+            if len(result) > 0:
+                actual = "result " + result[-1]
+                actual_val = result[0]
+        if not actual:
+            result = re.findall(r'Error: \[trap\] (.*?) \(', "\n" + output + "\n", re.MULTILINE)
+            if len(result) > 0:
+                actual = "trap " + result[-1]
+        if not actual:
+            result = re.findall(r'Error: (.*?)$', "\n" + output + "\n", re.MULTILINE)
+            if len(result) > 0:
+                actual = "error " + result[-1]
+        if not actual:
+            actual = "<No Result>"
+            force_fail = True
 
-    print(f"Running {fn}")
+        if actual == "error no operation ()":
+            actual = "<Not Implemented>"
+            stats.missing += 1
+            force_fail = True
+        elif actual == "<Crashed>":
+            stats.crashed += 1
+            force_fail = True
+        elif actual == "<Timeout>":
+            stats.timeout += 1
+            force_fail = True
 
-    for cmd in data["commands"]:
-        test = dotdict()
-        test.line = int(cmd["line"])
-        test.source = wast_source + ":" + str(test.line)
-        test.wasm = wasm_module
-        test.type = cmd["type"]
-
-        if test.type == "module":
-            wasm_module = cmd["filename"]
-
-            if args.verbose:
-                print(f"Loading {wasm_module}")
-
-            try:
-                wasm_fn = os.path.join(pathname(fn), wasm_module)
-
-                wasm3.init()
-
-                res = wasm3.load(wasm_fn)
-                if res:
-                    warning(res)
-            except Exception as e:
-                pass #fatal(str(e))
-
-        elif (  test.type == "action" or
-                test.type == "assert_return" or
-                test.type == "assert_trap" or
-                test.type == "assert_exhaustion" or
-                test.type == "assert_return_canonical_nan" or
-                test.type == "assert_return_arithmetic_nan"):
-
-            if args.line and test.line != args.line:
-                continue
-
-            if test.type == "action":
-                test.expected_anything = True
-            elif test.type == "assert_return":
-                test.expected = cmd["expected"]
-            elif test.type == "assert_return_canonical_nan":
-                test.expected = cmd["expected"]
-                test.expected[0]["value"] = "nan:canonical"
-            elif test.type == "assert_return_arithmetic_nan":
-                test.expected = cmd["expected"]
-                test.expected[0]["value"] = "nan:arithmetic"
-            elif test.type == "assert_trap":
-                test.expected_trap = cmd["text"]
-            elif test.type == "assert_exhaustion":
-                test.expected_trap = "stack overflow"
+        expect = None
+        if "expected" in test:
+            if len(test.expected) == 0:
+                expect = "result <Empty Stack>"
             else:
-                stats.skipped += 1
-                warning(f"Skipped {test.source} ({test.type} not implemented)")
-                continue
+                if actual_val is not None:
+                    actual = "result " + combineResults(parseResults(actual_val))
+                expect = "result " + combineResults(normalizeResults(test.expected))
 
-            test.action = dotdict(cmd["action"])
-            if test.action.type == "invoke":
+        elif "expected_trap" in test:
+            if test.expected_trap in trapmap:
+                test.expected_trap = trapmap[test.expected_trap]
 
-                # TODO: invoking in modules not implemented
-                if test.action.module:
-                    stats.skipped += 1
-                    warning(f"Skipped {test.source} (invoke in module)")
+            expect = "trap " + str(test.expected_trap)
+        elif "expected_anything" in test:
+            expect = "<Anything>"
+        else:
+            expect = "<Unknown>"
+
+        def showTestResult():
+            print(" ----------------------")
+            print(f"Test:     {ansi.HEADER}{test_id}{ansi.ENDC}")
+            print(f"Args:     {', '.join(displayArgs)}")
+            print(f"Expected: {ansi.OKGREEN}{expect}{ansi.ENDC}")
+            print(f"Actual:   {ansi.WARNING}{actual}{ansi.ENDC}")
+            if args.show_logs and len(output):
+                print(f"Log:")
+                print(output)
+
+        log.write(f"{test.source}\t|\t{test.wasm} {test.action.field}({', '.join(displayArgs)})\t=>\t\t")
+        if actual == expect or (expect == "<Anything>" and not force_fail):
+            stats.success += 1
+            log.write(f"OK: {actual}\n")
+            if args.line:
+                showTestResult()
+        else:
+            stats.failed += 1
+            failed_tests.append((test_id, ', '.join(displayArgs), expect, actual))
+            log.write(f"FAIL: {actual}, should be: {expect}\n")
+            if args.silent:
+                return
+
+            showTestResult()
+
+    if args.file:
+        jsonFiles = args.file
+    else:
+        jsonFiles  = glob.glob(os.path.join(spec_dir, "core", "*.json"))
+        jsonFiles += glob.glob(os.path.join(spec_dir, "proposals", "sign-extension-ops", "*.json"))
+        jsonFiles += glob.glob(os.path.join(spec_dir, "proposals", "nontrapping-float-to-int-conversions", "*.json"))
+
+    jsonFiles = list(map(lambda x: os.path.relpath(x, scriptDir), jsonFiles))
+    jsonFiles.sort()
+
+    for fn in jsonFiles:
+        with open(fn, encoding='utf-8') as f:
+            data = json.load(f)
+
+        wast_source = filename(data["source_filename"])
+        wasm_module = ""
+
+        print(f"Running {fn}")
+
+        for cmd in data["commands"]:
+            test = dotdict()
+            test.line = int(cmd["line"])
+            test.source = wast_source + ":" + str(test.line)
+            test.wasm = wasm_module
+            test.type = cmd["type"]
+
+            if test.type == "module":
+                wasm_module = cmd["filename"]
+
+                if args.verbose:
+                    print(f"Loading {wasm_module}")
+
+                try:
+                    wasm_fn = os.path.join(pathname(fn), wasm_module)
+
+                    wasm3.init()
+
+                    res = wasm3.load(wasm_fn)
+                    if res:
+                        warning(res)
+                except Exception as e:
+                    pass
+
+            elif (  test.type == "action" or
+                    test.type == "assert_return" or
+                    test.type == "assert_trap" or
+                    test.type == "assert_exhaustion" or
+                    test.type == "assert_return_canonical_nan" or
+                    test.type == "assert_return_arithmetic_nan"):
+
+                if args.line and test.line != args.line:
                     continue
 
-                test.action.field = escape_str(test.action.field)
+                if test.type == "action":
+                    test.expected_anything = True
+                elif test.type == "assert_return":
+                    test.expected = cmd["expected"]
+                elif test.type == "assert_return_canonical_nan":
+                    test.expected = cmd["expected"]
+                    test.expected[0]["value"] = "nan:canonical"
+                elif test.type == "assert_return_arithmetic_nan":
+                    test.expected = cmd["expected"]
+                    test.expected[0]["value"] = "nan:arithmetic"
+                elif test.type == "assert_trap":
+                    test.expected_trap = cmd["text"]
+                elif test.type == "assert_exhaustion":
+                    test.expected_trap = "stack overflow"
+                else:
+                    stats.skipped += 1
+                    warning(f"Skipped {test.source} ({test.type} not implemented)")
+                    continue
 
-                runInvoke(test)
+                test.action = dotdict(cmd["action"])
+                if test.action.type == "invoke":
+
+                    if test.action.module:
+                        stats.skipped += 1
+                        warning(f"Skipped {test.source} (invoke in module)")
+                        continue
+
+                    test.action.field = escape_str(test.action.field)
+
+                    runInvoke(test)
+                else:
+                    stats.skipped += 1
+                    warning(f"Skipped {test.source} (unknown action type '{test.action.type}')")
+
+            elif (test.type == "assert_invalid" or
+                  test.type == "assert_malformed" or
+                  test.type == "assert_uninstantiable"):
+                pass
+
             else:
                 stats.skipped += 1
-                warning(f"Skipped {test.source} (unknown action type '{test.action.type}')")
+                warning(f"Skipped {test.source} ('{test.type}' not implemented)")
+
+    if (stats.failed + stats.success) != stats.total_run:
+        warning("Statistics summary invalid", True)
+
+    pprint(stats)
+
+    if stats.failed > 0:
+        failed = (stats.failed*100)/stats.total_run
+        print(f"{ansi.FAIL}=======================")
+        print(f" FAILED: {failed:.2f}%")
+        if stats.crashed > 0:
+            print(f" Crashed: {stats.crashed}")
+        print(f"======================={ansi.ENDC}")
+
+    elif stats.success > 0:
+        print(f"{ansi.OKGREEN}=======================")
+        print(f" {stats.success}/{stats.total_run} tests OK")
+        if stats.skipped > 0:
+            print(f"{ansi.WARNING} ({stats.skipped} tests skipped){ansi.OKGREEN}")
+        print(f"======================={ansi.ENDC}")
+
+    elif stats.total_run == 0:
+        print("Error: No tests run")
+
+    return stats
 
 
-        # These are irrelevant
-        elif (test.type == "assert_invalid" or
-              test.type == "assert_malformed" or
-              test.type == "assert_uninstantiable"):
-            pass
+if args.dual_pass:
+    print(f"\n{'='*60}")
+    print(f" PASS 1: INTERNAL MEMORY (baseline)")
+    print(f"{'='*60}\n")
+    stats_pass1 = run_test_pass(args.exec)
+    print(f"\n--- Pass 1 (internal memory): {stats_pass1.success}/{stats_pass1.total_run} OK ---\n")
 
-        # Others - report as skipped
-        else:
-            stats.skipped += 1
-            warning(f"Skipped {test.source} ('{test.type}' not implemented)")
+    ext_size = args.external_mem if args.external_mem else 1048576
+    ext_cmd = args.exec + f" --external-mem {ext_size}"
+    print(f"\n{'='*60}")
+    print(f" PASS 2: EXTERNAL MEMORY ({ext_size} bytes)")
+    print(f"{'='*60}\n")
+    stats_pass2 = run_test_pass(ext_cmd)
+    print(f"\n--- Pass 2 (external memory): {stats_pass2.success}/{stats_pass2.total_run} OK ---\n")
 
-if (stats.failed + stats.success) != stats.total_run:
-    warning("Statistics summary invalid", True)
-
-pprint(stats)
-
-if stats.failed > 0:
-    failed = (stats.failed*100)/stats.total_run
-    print(f"{ansi.FAIL}=======================")
-    print(f" FAILED: {failed:.2f}%")
-    if stats.crashed > 0:
-        print(f" Crashed: {stats.crashed}")
-    print(f"======================={ansi.ENDC}")
-    sys.exit(1)
-
-elif stats.success > 0:
-    print(f"{ansi.OKGREEN}=======================")
-    print(f" {stats.success}/{stats.total_run} tests OK")
-    if stats.skipped > 0:
-        print(f"{ansi.WARNING} ({stats.skipped} tests skipped){ansi.OKGREEN}")
-    print(f"======================={ansi.ENDC}")
-    
-elif stats.total_run == 0:
-    print("Error: No tests run")
-    sys.exit(1)
+    if stats_pass1.success != stats_pass2.success or stats_pass1.failed != stats_pass2.failed:
+        print(f"{ansi.FAIL}{'='*60}")
+        print(f" DUAL-PASS MISMATCH")
+        print(f"{'='*60}{ansi.ENDC}")
+        print(f"  Pass 1 (internal):  {stats_pass1.success}/{stats_pass1.total_run} OK, {stats_pass1.failed} failed")
+        print(f"  Pass 2 (external):  {stats_pass2.success}/{stats_pass2.total_run} OK, {stats_pass2.failed} failed")
+        sys.exit(1)
+    else:
+        print(f"{ansi.OKGREEN}{'='*60}")
+        print(f" DUAL-PASS OK: both passes produced {stats_pass1.success}/{stats_pass1.total_run} results")
+        print(f"{'='*60}{ansi.ENDC}")
+else:
+    stats = run_test_pass(exec_cmd)
+    if stats.failed > 0 or stats.total_run == 0:
+        sys.exit(1)
 

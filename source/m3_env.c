@@ -348,8 +348,12 @@ M3Result  InitMemory  (IM3Runtime io_runtime, IM3Module i_module)
     {
         u32 maxPages = i_module->memoryInfo.maxPages;
         u32 pageSize = i_module->memoryInfo.pageSize;
-        io_runtime->memory.maxPages = maxPages ? maxPages : 65536;
-        io_runtime->memory.pageSize = pageSize ? pageSize : d_m3DefaultMemPageSize;
+
+        if (not io_runtime->memory.isExternalMemory)
+        {
+            io_runtime->memory.maxPages = maxPages ? maxPages : 65536;
+            io_runtime->memory.pageSize = pageSize ? pageSize : d_m3DefaultMemPageSize;
+        }
 
         result = ResizeMemory (io_runtime, i_module->memoryInfo.initPages);
     }
@@ -378,7 +382,9 @@ M3Result  ResizeMemory  (IM3Runtime io_runtime, u32 i_numPages)
 
     if (memory->isExternalMemory)
     {
-        _throwif ("external memory cannot be resized", numPagesToAlloc > memory->numPages);
+        _throwif ("external memory cannot be resized", numPagesToAlloc > memory->maxPages);
+        memory->numPages = numPagesToAlloc;
+        memory->mallocated->length = numPagesToAlloc * io_runtime->memory.pageSize;
     }
     else if (numPagesToAlloc <= memory->maxPages)
     {
@@ -1259,6 +1265,7 @@ uint8_t *  m3_SetMemory  (IM3Runtime i_runtime, void * i_buffer, uint32_t i_buff
     memory->mallocated->length = i_bufferSize - headerSize;
 
     memory->numPages = (i_bufferSize - headerSize) / i_pageSize;
+    memory->maxPages = memory->numPages;
     memory->pageSize = i_pageSize;
     memory->isExternalMemory = true;
 

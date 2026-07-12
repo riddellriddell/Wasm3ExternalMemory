@@ -29,10 +29,12 @@ parser.add_argument("--exec", metavar="<interpreter>", default="../build/wasm3")
 parser.add_argument("--separate-args",  action='store_true')      # use "--" separator for wasmer, wasmtime
 parser.add_argument("--timeout", type=int,             default=120)
 parser.add_argument("--fast",    action='store_true')
+parser.add_argument("--external-mem", metavar="<size>", type=int, default=0,
+                    help="Run with external memory of given size (bytes)")
+parser.add_argument("--dual-pass", action="store_true",
+                    help="Run tests twice: once without --external-mem, once with")
 
 args = parser.parse_args()
-
-stats = dotdict(total_run=0, failed=0, crashed=0, timeout=0)
 
 commands_full = [
   {
@@ -146,68 +148,107 @@ commands_fast = [
   }
 ]
 
-def fail(msg):
-    print(f"{ansi.FAIL}FAIL:{ansi.ENDC} {msg}")
-    stats.failed += 1
-
 commands = commands_fast if args.fast else commands_full
 
-for cmd in commands:
-    if "skip" in cmd:
-        continue
+def fail(msg, fail_stats):
+    print(f"{ansi.FAIL}FAIL:{ansi.ENDC} {msg}")
+    fail_stats.failed += 1
 
-    command = args.exec.split(' ')
-    command.append(cmd['wasm'])
-    if "args" in cmd:
-        if args.separate_args:
-            command.append("--")
-        command.extend(cmd['args'])
+def run_wasi_pass(exec_cmd, external_mem):
+    pass_stats = dotdict(total_run=0, failed=0, crashed=0, timeout=0)
 
-    command = list(map(str, command))
-    print(f"=== {cmd['name']} ===")
-    stats.total_run += 1
-    try:
-        if "stdin" in cmd:
-            fn = cmd['stdin']
-            f = open(fn, "rb")
-            print(f"cat {fn} | {' '.join(command)}")
-            output = subprocess.check_output(command, timeout=args.timeout, stdin=f)
-        elif "can_crash" in cmd:
-            print(f"{' '.join(command)}")
-            output = subprocess.run(command, timeout=args.timeout, stdout=subprocess.PIPE, stderr=subprocess.STDOUT).stdout
-        else:
-            print(f"{' '.join(command)}")
-            output = subprocess.check_output(command, timeout=args.timeout)
-    except subprocess.TimeoutExpired:
-        stats.timeout += 1
-        fail("Timeout")
-        continue
-    except subprocess.CalledProcessError as e:
-        stats.crashed += 1
-        fail(f"Exited with error code {e.returncode}")
-        continue
+    for cmd in commands:
+        if "skip" in cmd:
+            continue
 
-    if "expect_sha1" in cmd:
-        actual = hashlib.sha1(output).hexdigest()
-        if actual != cmd['expect_sha1']:
-            fail(f"Actual sha1: {actual}")
+        command = exec_cmd.split(' ')
+        if external_mem > 0:
+            command.append("--external-mem")
+            command.append(str(external_mem))
+        command.append(cmd['wasm'])
+        if "args" in cmd:
+            if args.separate_args:
+                command.append("--")
+            command.extend(cmd['args'])
 
-    if "expect_pattern" in cmd:
-        actual = output.decode("utf-8")
-        if not fnmatch.fnmatch(actual, cmd['expect_pattern']):
-            fail(f"Output does not match pattern:\n{actual}")
+        command = list(map(str, command))
+        print(f"=== {cmd['name']} ===")
+        pass_stats.total_run += 1
+        try:
+            if "stdin" in cmd:
+                fn = cmd['stdin']
+                f = open(fn, "rb")
+                print(f"cat {fn} | {' '.join(command)}")
+                output = subprocess.check_output(command, timeout=args.timeout, stdin=f)
+            elif "can_crash" in cmd:
+                print(f"{' '.join(command)}")
+                output = subprocess.run(command, timeout=args.timeout, stdout=subprocess.PIPE, stderr=subprocess.STDOUT).stdout
+            else:
+                print(f"{' '.join(command)}")
+                output = subprocess.check_output(command, timeout=args.timeout)
+        except subprocess.TimeoutExpired:
+            pass_stats.timeout += 1
+            fail("Timeout", pass_stats)
+            continue
+        except subprocess.CalledProcessError as e:
+            pass_stats.crashed += 1
+            fail(f"Exited with error code {e.returncode}", pass_stats)
+            continue
 
-    print()
+        if "expect_sha1" in cmd:
+            actual = hashlib.sha1(output).hexdigest()
+            if actual != cmd['expect_sha1']:
+                fail(f"Actual sha1: {actual}", pass_stats)
 
-pprint(stats)
+        if "expect_pattern" in cmd:
+            actual = output.decode("utf-8")
+            if not fnmatch.fnmatch(actual, cmd['expect_pattern']):
+                fail(f"Output does not match pattern:\n{actual}", pass_stats)
 
-if stats.failed:
-    print(f"{ansi.FAIL}=======================")
-    print(f" FAILED: {stats.failed}/{stats.total_run}")
-    print(f"======================={ansi.ENDC}")
-    sys.exit(1)
+        print()
 
+    return pass_stats
+
+
+if args.dual_pass:
+    print(f"\n{'='*60}")
+    print(f" PASS 1: INTERNAL MEMORY (baseline)")
+    print(f"{'='*60}\n")
+    stats_pass1 = run_wasi_pass(args.exec, 0)
+    print(f"\n--- Pass 1 (internal memory): {stats_pass1.total_run - stats_pass1.failed}/{stats_pass1.total_run} OK ---\n")
+    pprint(stats_pass1)
+
+    ext_size = args.external_mem if args.external_mem else 67108864
+    print(f"\n{'='*60}")
+    print(f" PASS 2: EXTERNAL MEMORY ({ext_size} bytes)")
+    print(f"{'='*60}\n")
+    stats_pass2 = run_wasi_pass(args.exec, ext_size)
+    print(f"\n--- Pass 2 (external memory): {stats_pass2.total_run - stats_pass2.failed}/{stats_pass2.total_run} OK ---\n")
+    pprint(stats_pass2)
+
+    if stats_pass1.failed != stats_pass2.failed:
+        print(f"{ansi.FAIL}{'='*60}")
+        print(f" DUAL-PASS MISMATCH")
+        print(f"{'='*60}{ansi.ENDC}")
+        print(f"  Pass 1 (internal):  {stats_pass1.total_run - stats_pass1.failed}/{stats_pass1.total_run} OK, {stats_pass1.failed} failed")
+        print(f"  Pass 2 (external):  {stats_pass2.total_run - stats_pass2.failed}/{stats_pass2.total_run} OK, {stats_pass2.failed} failed")
+        sys.exit(1)
+    else:
+        print(f"{ansi.OKGREEN}{'='*60}")
+        print(f" DUAL-PASS OK: both passes produced {stats_pass1.total_run - stats_pass1.failed}/{stats_pass1.total_run} results")
+        print(f"{'='*60}{ansi.ENDC}")
 else:
-    print(f"{ansi.OKGREEN}=======================")
-    print(f" All {stats.total_run} tests OK")
-    print(f"======================={ansi.ENDC}")
+    stats = run_wasi_pass(args.exec, args.external_mem)
+
+    pprint(stats)
+
+    if stats.failed:
+        print(f"{ansi.FAIL}=======================")
+        print(f" FAILED: {stats.failed}/{stats.total_run}")
+        print(f"======================={ansi.ENDC}")
+        sys.exit(1)
+
+    else:
+        print(f"{ansi.OKGREEN}=======================")
+        print(f" All {stats.total_run} tests OK")
+        print(f"======================={ansi.ENDC}")
