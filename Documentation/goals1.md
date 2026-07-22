@@ -24,13 +24,13 @@ repo: "your-repo"
 
 | Goal | Status | Link |
 |------|--------|------|
-| Goal 1.1 – Add `isExternalMemory` Flag | Not Started | [Jump to details](#goal-1-1) |
-| Goal 1.2 – Implement `m3_SetMemory` API | Not Started | [Jump to details](#goal-1-2) |
-| Goal 1.3 – Guard Existing Memory Functions | Not Started | [Jump to details](#goal-1-3) |
+| Goal 1.1 – Add `isExternalMemory` Flag | Complete | [Jump to details](#goal-1-1) |
+| Goal 1.2 – Implement `m3_SetMemory` API | Complete | [Jump to details](#goal-1-2) |
+| Goal 1.3 – Guard Existing Memory Functions | Complete | [Jump to details](#goal-1-3) |
 | Goal 1.4 – Add `--external-mem` CLI Argument | Not Started | [Jump to details](#goal-1-4) |
 | Goal 1.5 – Dual-Pass Test Execution | Not Started | [Jump to details](#goal-1-5) |
 
-**Milestone Status:** Not Started — 0/5 goals complete.
+**Milestone Status:** In Progress — 3/5 goals complete.
 
 ### Milestone 1 Scope
 
@@ -66,25 +66,25 @@ repo: "your-repo"
 
 ### High-Level Architecture
 
-- **M3Memory struct** — gains `isExternalMemory` boolean field to track buffer ownership
+- **M3Memory struct** — gains `runtime`, `maxStack`, `data`, `length` fields (moved from removed `M3MemoryHeader`), plus `isExternalMemory` boolean field to track buffer ownership
 - **m3_SetMemory** — new public API function in `wasm3.h`, implemented in `m3_env.c`
 - **ResizeMemory guard** — skips `m3_Realloc` when external; validates requested size fits buffer
-- **Runtime_Release guard** — skips `m3_Free(mallocated)` when external
+- **Runtime_Release guard** — skips `m3_Free(i_runtime->memory.data)` when external
 
 ### Data Flow
 
 #### Pipeline: External Memory Setup
 
 1. **Caller allocates buffer** — manages lifetime externally
-2. **m3_SetMemory called** — validates size, sets `mallocated`, populates header, sets flag
-3. **m3_LoadModule called** — `InitDataSegments` copies wasm data into external buffer
-4. **Execution proceeds** — VM uses `m3MemData(mallocated)` identically to internal path
+2. **m3_SetMemory called** — validates size, sets `memory->data`, populates `memory->runtime`/`maxStack`/`length`, sets flag
+3. **m3_LoadModule called** — `InitDataSegments` copies wasm data into external buffer via `memory->data`
+4. **Execution proceeds** — VM uses `_mem->data` identically to internal path
 
 #### Pipeline: Buffer Swap (Rollback)
 
-1. **Snapshot** — caller `memcpy`s entire buffer (header + data) to separate storage
+1. **Snapshot** — caller `memcpy`s data pages to separate storage
 2. **Run wasm** — modifies memory contents
-3. **m3_SetMemory called with snapshot** — overwrites header with current runtime/maxStack, data pages restored
+3. **m3_SetMemory called with snapshot** — sets `memory->data` and repopulates `runtime`/`maxStack`/`length`, data pages restored
 4. **Execution resumes** — on restored state
 
 ---
@@ -129,23 +129,23 @@ repo: "your-repo"
 - **Deliverable 1:** Function declaration in `wasm3.h`
   - Signature: `uint8_t * m3_SetMemory(IM3Runtime i_runtime, void * i_buffer, uint32_t i_bufferSize, uint32_t i_pageSize)`
 - **Deliverable 2:** Function implementation in `m3_env.c`
-  - Validates `i_bufferSize >= sizeof(M3MemoryHeader) + i_pageSize`
-  - Sets `memory->mallocated = (M3MemoryHeader*)i_buffer`
-  - Populates header: `runtime`, `maxStack`, `length`
-  - Computes `numPages = (i_bufferSize - sizeof(M3MemoryHeader)) / i_pageSize`
+  - Validates `i_bufferSize >= i_pageSize`
+  - Sets `memory->data = (u8*)i_buffer`
+  - Sets `memory->runtime`, `memory->maxStack`, `memory->length`
+  - Computes `numPages = i_bufferSize / i_pageSize`
   - Sets `memory->isExternalMemory = true`
-  - Returns pointer to data region via `m3MemData(mallocated)`
+  - Returns pointer to data region via `memory->data`
 - **Deliverable 3:** Log entry emitted when `d_m3LogRuntime` is enabled
 
 #### Acceptance Criteria
 
-- [ ] `m3_SetMemory` is declared in `wasm3.h` and callable from C code
-- [ ] Returns valid data pointer on success
-- [ ] Returns `NULL` (or appropriate error) when buffer too small
-- [ ] Header fields (`runtime`, `maxStack`, `length`) are correctly populated
-- [ ] `numPages` is correctly computed from buffer size and page size
-- [ ] `isExternalMemory` is set to `true`
-- [ ] `pageSize` defaults to `d_m3DefaultMemPageSize` (65536) when `i_pageSize` is 0
+- [x] `m3_SetMemory` is declared in `wasm3.h` and callable from C code
+- [x] Returns valid data pointer on success
+- [x] Returns `NULL` (or appropriate error) when buffer too small
+- [x] Header fields (`runtime`, `maxStack`, `length`) are correctly populated
+- [x] `numPages` is correctly computed from buffer size and page size
+- [x] `isExternalMemory` is set to `true`
+- [x] `pageSize` defaults to `d_m3DefaultMemPageSize` (65536) when `i_pageSize` is 0
 
 #### Out of Scope
 
@@ -167,17 +167,17 @@ repo: "your-repo"
   - Validate requested page count fits within existing buffer
   - Update `numPages` and `length` accordingly
 - **Deliverable 2:** `Runtime_Release` guard in `m3_env.c:230`
-  - When `isExternalMemory == true`: skip `m3_Free(mallocated)`
-  - Set `mallocated = NULL` to avoid dangling pointer
+  - When `isExternalMemory == true`: skip `m3_Free(runtime->memory.data)`
+  - Set `data = NULL` to avoid dangling pointer
 
 #### Acceptance Criteria
 
-- [ ] `ResizeMemory` does not call `m3_Realloc` when external memory is active
-- [ ] `ResizeMemory` rejects requests that exceed the external buffer size
-- [ ] `Runtime_Release` does not call `m3_Free` when external memory is active
-- [ ] `Runtime_Release` nullifies `mallocated` after skipping free
-- [ ] Internal memory path ( `isExternalMemory == false`) remains unchanged
-- [ ] All existing tests pass
+- [x] `ResizeMemory` does not call `m3_Realloc` when external memory is active
+- [x] `ResizeMemory` rejects requests that exceed the external buffer size
+- [x] `Runtime_Release` does not call `m3_Free` when external memory is active
+- [x] `Runtime_Release` nullifies `data` after skipping free
+- [x] Internal memory path ( `isExternalMemory == false`) remains unchanged
+- [x] All existing tests pass
 
 #### Out of Scope
 
@@ -257,7 +257,7 @@ repo: "your-repo"
 ### Zero Overhead on Hot Path
 
 - The `isExternalMemory` flag is only checked in `ResizeMemory` and `Runtime_Release` — both cold paths
-- The VM dispatch loop (`m3_exec.h`) uses `m3MemData(mallocated)` which is allocation-source-agnostic
+- The VM dispatch loop (`m3_exec.h`) uses `m3MemData(_mem)` (which expands to `_mem->data`) — allocation-source-agnostic
 - No additional branching in compiled wasm code execution
 
 ### Backward Compatibility
@@ -270,7 +270,7 @@ repo: "your-repo"
 
 - Bounds checking is unchanged — wasm3 enforces page limits and `memoryLimit` regardless of ownership
 - Data segments validated against buffer size during `InitDataSegments`
-- `M3MemoryHeader.runtime` always set to current runtime by `m3_SetMemory` — prevents stale pointer reuse
+- `M3Memory.runtime` always set to current runtime by `m3_SetMemory` — prevents stale pointer reuse
 
 ---
 

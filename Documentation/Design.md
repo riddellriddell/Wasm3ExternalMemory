@@ -56,8 +56,7 @@ M3Module (parsed wasm binary: functions, data segments, globals, memory info)
 - **M3Environment** — Shared type registry and code page pool. One per application. Manages `M3FuncType` linked list and released code pages.
 - **M3Runtime** — Execution context holding the wasm stack, compiled code pages, and wasm linear memory (`M3Memory`). One per wasm execution instance.
 - **M3Module** — Parsed wasm module containing functions, data segments, globals, element segments, and memory configuration. Loaded into a runtime via `m3_LoadModule`.
-- **M3Memory** — Tracks the linear memory buffer (`mallocated` header pointer), page count, page size, and (new) external memory ownership flag.
-- **M3MemoryHeader** — 24-byte struct prepended to the linear memory buffer. Contains the runtime back-pointer, stack boundary, and buffer length.
+- **M3Memory** — Tracks the linear memory buffer (`data` pointer), page count, page size, runtime back-pointer, stack boundary, and (new) external memory ownership flag. No header is prepended to the buffer.
 
 ### External Dependencies
 
@@ -87,46 +86,39 @@ This is the central design area for this project.
 
 ### Buffer Layout
 
-The wasm linear memory buffer has a fixed layout:
+The wasm linear memory buffer is a pure data blob with no embedded metadata:
 
 ```
-[M3MemoryHeader (24 bytes on 64-bit)] [wasm linear memory data pages...]
-^ mallocated                          ^ m3MemData(mallocated)
+[runtime->memory.data]  →  [wasm linear memory data pages...]
+[_mem = &runtime->memory]                              (stable pointer)
 ```
 
-The `m3MemData` macro (`m3_exec_defs.h:15`) skips past the header to return the raw data pointer:
+The `m3MemData` macro (`m3_exec_defs.h:15`) returns the data pointer directly:
 
 ```c
-#define m3MemData(mem)  (u8*)(((M3MemoryHeader*)(mem))+1)
+#define m3MemData(mem)  ((mem)->data)
 ```
 
-### M3MemoryHeader Fields
+### M3Memory Struct
 
-Defined in `m3_core.h:132-138`:
+Defined in `m3_env.h:29-39`:
 
 | Field | Type | Purpose |
 | --- | --- | --- |
 | `runtime` | `IM3Runtime` | Back-pointer to the owning M3Runtime instance |
 | `maxStack` | `void*` | Stack boundary for overflow checks during execution |
-| `length` | `size_t` | Size of the data pages in bytes (excludes header) |
-
-### M3Memory Struct
-
-Defined in `m3_env.h:29-37`:
-
-| Field | Type | Purpose |
-| --- | --- | --- |
-| `mallocated` | `M3MemoryHeader*` | Pointer to the start of the buffer (header + data) |
+| `data` | `u8*` | Pointer to the linear memory data buffer |
+| `length` | `size_t` | Size of the data pages in bytes |
 | `numPages` | `u32` | Current number of wasm memory pages |
 | `maxPages` | `u32` | Maximum allowed pages |
 | `pageSize` | `u32` | Bytes per page (default 65536) |
-| `isExternalMemory` | `bool` | **(new)** Whether the buffer is externally owned |
+| `isExternalMemory` | `bool` | Whether the buffer is externally owned |
 
 ### Current Memory Ownership Model
 
-1. **Allocation**: `ResizeMemory()` (`m3_env.c:353`) calls `m3_Realloc()` on `mallocated` to allocate or grow the buffer. It populates the `M3MemoryHeader` fields.
-2. **Data loading**: `InitDataSegments()` (`m3_env.c:456`) `memcpy`s parsed wasm data segments into the buffer at their specified offsets.
-3. **Deallocation**: `Runtime_Release()` (`m3_env.c:230`) calls `m3_Free(mallocated)`.
+1. **Allocation**: `ResizeMemory()` (`m3_env.c:365`) calls `m3_Realloc()` on `memory->data` to allocate or grow the buffer. It also sets `memory->runtime`, `memory->maxStack`, and `memory->length`.
+2. **Data loading**: `InitDataSegments()` (`m3_env.c:462`) `memcpy`s parsed wasm data segments into the buffer at their specified offsets via `io_memory->data`.
+3. **Deallocation**: `Runtime_Release()` (`m3_env.c:230`) calls `m3_Free(runtime->memory.data)`.
 
 ### Proposed External Memory Model
 
@@ -140,24 +132,24 @@ uint8_t * m3_SetMemory(IM3Runtime i_runtime,
 ```
 
 **Behavior:**
-1. Validates that `i_bufferSize >= sizeof(M3MemoryHeader) + i_pageSize`
-2. Sets `memory->mallocated` to `i_buffer`
-3. Populates the header: `runtime`, `maxStack`, `length`
-4. Computes `numPages` from `(i_bufferSize - sizeof(M3MemoryHeader)) / i_pageSize`
+1. Validates that `i_bufferSize >= i_pageSize`
+2. Sets `memory->data` to `i_buffer` directly
+3. Sets `memory->runtime`, `memory->maxStack`, `memory->length`
+4. Computes `numPages` from `i_bufferSize / i_pageSize`
 5. Sets `memory->isExternalMemory = true`
-6. Returns a pointer to the data region (same as `m3_GetMemory`)
+6. Returns `memory->data`
 
 **Guards added to existing functions:**
 - `ResizeMemory()`: When `isExternalMemory == true`, skips `m3_Realloc`. Validates that the requested page count fits within the existing buffer. Updates `numPages` and `length`.
-- `Runtime_Release()`: When `isExternalMemory == true`, skips `m3_Free(mallocated)`.
+- `Runtime_Release()`: When `isExternalMemory == true`, skips `m3_Free(runtime->memory.data)`.
 
 ### Memory Lifecycle States
 
 | State | Condition | Behavior |
 | --- | --- | --- |
-| Unallocated | `mallocated == NULL` | After `m3_NewRuntime`, before module load or `m3_SetMemory` |
-| Internal | `isExternalMemory == false`, `mallocated != NULL` | Default path; wasm3 owns and manages the buffer |
-| External | `isExternalMemory == true`, `mallocated != NULL` | Caller owns the buffer; wasm3 populates header only |
+| Unallocated | `data == NULL` | After `m3_NewRuntime`, before module load or `m3_SetMemory` |
+| Internal | `isExternalMemory == false`, `data != NULL` | Default path; wasm3 owns and manages the buffer |
+| External | `isExternalMemory == true`, `data != NULL` | Caller owns the buffer; wasm3 writes runtime metadata to `M3Memory` struct only |
 
 ### Rollback Workflow
 
@@ -167,19 +159,19 @@ m3_NewRuntime(env, stackSize, NULL)
 m3_SetMemory(runtime, emptyBuf, bufSize, pageSize)
 m3_LoadModule(runtime, module)          // copies data segments into emptyBuf
 
-// 2. Snapshot (raw copy of entire buffer including header)
-memcpy(snapshot, runtime->memory.mallocated, bufSize)
+// 2. Snapshot (raw copy of data only — no header)
+memcpy(snapshot, runtime->memory.data, bufSize)
 
 // 3. Run wasm — modifies memory contents
 m3_FindFunction(&func, runtime, "main")
 m3_CallV(func)
 
 // 4. Rollback to earlier state
-m3_SetMemory(runtime, snapshot, bufSize, pageSize)  // re-fills header, restores data
+m3_SetMemory(runtime, snapshot, bufSize, pageSize)  // sets data pointer, restores metadata
 // ready to run again on restored state
 ```
 
-The snapshot captures the entire buffer (header + data). On restore, `m3_SetMemory` overwrites the header with the current instance's `runtime` and `maxStack` values. The data pages are preserved as-is.
+`m3_SetMemory` sets `memory->data` and repopulates `memory->runtime`, `memory->maxStack`, and `memory->length`. The caller copies only the data pages (no header).
 
 ---
 
@@ -210,7 +202,7 @@ No changes to the execution pipeline. The `m3MemData` macro works identically re
 **Status:** New
 
 ```
-m3_SetMemory(newBuffer) → header populated → ready to run
+m3_SetMemory(newBuffer) → data pointer set → ready to run
 ```
 
 O(1) operation — pointer assignment and header fill. No data copy required because the caller provides a fully-formed buffer.
@@ -271,7 +263,7 @@ m3_exec.h (VM execution, uses m3MemData macro)
 
 **Rules:**
 1. Higher layers depend on lower layers, never the reverse.
-2. The execution layer accesses memory only through `m3MemData(mallocated)`, which is allocation-source-agnostic.
+2. The execution layer accesses memory only through `memory->data`, which is allocation-source-agnostic.
 3. The public API layer (`wasm3.h`) is the only entry point for external memory injection.
 
 ---
@@ -298,7 +290,7 @@ m3_exec.h (VM execution, uses m3MemData macro)
 - External memory buffers are unowned by wasm3. The caller must ensure the buffer's lifetime exceeds the runtime's lifetime. Use after freeing the buffer is undefined behavior.
 - Bounds checking is unchanged. wasm3 still enforces page limits and the `memoryLimit` cap regardless of memory ownership.
 - Data segments are still validated against buffer size during `InitDataSegments` — out-of-bounds writes are rejected.
-- The `M3MemoryHeader.runtime` back-pointer is always set to the current runtime by `m3_SetMemory`, preventing stale pointer reuse.
+- `M3Memory.runtime` is always set to the current runtime by `m3_SetMemory`, preventing stale pointer reuse.
 
 ---
 
@@ -361,7 +353,7 @@ Before any change is merged or considered complete:
 Multiple wasm3 instances sharing the same underlying physical pages via memory-mapped files:
 
 - **Mechanism**: Memory-mapped files (`CreateFileMapping`/`MapViewOfFile` on Windows, `mmap` on POSIX)
-- **Layout**: Each instance has its own `M3MemoryHeader` (per-instance state), but the data pages are mapped to the same physical pages
+- **Layout**: Each instance has its own `M3Memory` struct (per-instance state), but the data pages are mapped to the same physical pages
 - **Concurrency**: No CoW protection — all instances can write simultaneously. Race conditions handled at the application level.
 - **Cross-platform**: Abstract behind a platform abstraction layer with Windows, Linux, macOS, and iOS implementations
 

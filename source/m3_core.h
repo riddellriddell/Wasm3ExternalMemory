@@ -129,13 +129,8 @@ typedef void /*const*/ *                    code_t;
 typedef code_t const * /*__restrict__*/     pc_t;
 
 
-typedef struct M3MemoryHeader
-{
-    IM3Runtime      runtime;
-    void *          maxStack;
-    size_t          length;
-}
-M3MemoryHeader;
+struct M3Memory;
+typedef struct M3Memory *       IM3Memory;
 
 struct M3CodeMappingPage;
 

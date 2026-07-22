@@ -39,7 +39,7 @@ repo: "your-repo"
 - Zero overhead on the hot execution path — same VM dispatch, same `m3MemData` macro
 - Full backward compatibility — existing code paths and tests remain unchanged
 
-**Status:** Not Started - 0/5 goals complete. See [goals1.md](goals1.md) for details.
+**Status:** In Progress - 3/5 goals complete (1.1, 1.2, 1.3). See [goals1.md](goals1.md) for details.
 
 **Goals:** [goals1.md](goals1.md)
 
@@ -55,7 +55,7 @@ repo: "your-repo"
 
 - Collaborative wasm execution requires multiple instances to read/write shared state
 - Memory-mapped files provide cross-platform shared memory without custom IPC
-- Each instance retains its own `M3MemoryHeader` for independent stack bounds and runtime back-pointers
+- Each instance retains its own `M3Memory` struct for independent stack bounds and runtime back-pointers
 
 **Impact:**
 

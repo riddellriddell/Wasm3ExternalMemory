@@ -28,7 +28,10 @@ M3MemoryInfo;
 
 typedef struct M3Memory
 {
-    M3MemoryHeader *        mallocated;
+    IM3Runtime              runtime;
+    void *                  maxStack;
+    u8 *                    data;
+    size_t                  length;
 
     u32                     numPages;
     u32                     maxPages;
@@ -38,7 +41,7 @@ typedef struct M3Memory
 }
 M3Memory;
 
-typedef M3Memory *          IM3Memory;
+
 
 
 //---------------------------------------------------------------------------------------------------------------------------------

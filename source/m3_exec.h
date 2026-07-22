@@ -553,8 +553,6 @@ d_m3Op  (Call)
     m3ret_t r = Call (callPC, sp, _mem, d_m3OpDefaultArgs);
 # endif
 
-    _mem = memory->mallocated;
-
     if (M3_LIKELY(not r))
         nextOp ();
     else
@@ -596,8 +594,6 @@ d_m3Op  (CallIndirect)
 # else
                     r = Call (function->compiled, sp, _mem, d_m3OpDefaultArgs);
 # endif
-
-                    _mem = memory->mallocated;
 
                     if (M3_LIKELY(not r))
                         nextOpDirect ();
@@ -686,7 +682,6 @@ d_m3Op  (CallRawFunction)
 #endif
 
     if (M3_UNLIKELY(possible_trap)) {
-        _mem = memory->mallocated;
         pushBacktraceFrame ();
     }
     forwardTrap (possible_trap);
@@ -719,8 +714,6 @@ d_m3Op  (MemGrow)
             M3Result r = ResizeMemory (runtime, requiredPages);
             if (r)
                 _r0 = -1;
-
-            _mem = memory->mallocated;
         }
     }
     else
@@ -852,7 +845,6 @@ d_m3Op  (Entry)
 #endif
 
         if (M3_UNLIKELY(r)) {
-            _mem = memory->mallocated;
             fillBacktraceFrame ();
         }
         forwardTrap (r);
@@ -885,9 +877,6 @@ d_m3Op  (Loop)
         trace_rt->callDepth--;
         d_m3TracePrint("}");
 #endif
-        // linear memory pointer needs refreshed here because the block it's looping over
-        // can potentially invoke the grow operation.
-        _mem = memory->mallocated;
     }
     while (r == _pc);
 

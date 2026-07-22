@@ -10,7 +10,7 @@ repo: "wasm3"
 
 - Task Type: `GOAL`
 - Task Name: `M3MemoryHeader` Decoupling
-- Status: `Draft`
+- Status: `Complete`
 - Owner: `wasm3`
 - Last Updated: `2026-07-20`
 
@@ -275,10 +275,10 @@ The `M3MemoryHeader` struct is deleted. No struct is prepended to the linear mem
 
 ## Completion Checklist
 
-- [ ] Implementation matches the linked design and goal context
-- [ ] Scope stayed within this plan
-- [ ] Verification steps were completed or explicitly deferred
-- [ ] Relevant status docs were updated
+- [x] Implementation matches the linked design and goal context
+- [x] Scope stayed within this plan
+- [x] Verification steps were completed or explicitly deferred (all tests pass)
+- [x] Relevant status docs were updated
 - [ ] A handover document was created if the work stopped mid-phase
 
 ## Notes for the Implementing Agent
