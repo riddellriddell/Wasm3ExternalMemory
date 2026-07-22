@@ -218,7 +218,7 @@ if args.dual_pass:
     print(f"\n--- Pass 1 (internal memory): {stats_pass1.total_run - stats_pass1.failed}/{stats_pass1.total_run} OK ---\n")
     pprint(stats_pass1)
 
-    ext_size = args.external_mem if args.external_mem else 67108864
+    ext_size = args.external_mem if args.external_mem else 268435456
     print(f"\n{'='*60}")
     print(f" PASS 2: EXTERNAL MEMORY ({ext_size} bytes)")
     print(f"{'='*60}\n")
