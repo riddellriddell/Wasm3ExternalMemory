@@ -1269,6 +1269,10 @@ uint8_t *  m3_SetMemory  (IM3Runtime i_runtime, void * i_buffer, uint32_t i_buff
     return memory->data;
 }
 
+int  m3_IsExternalMemory  (IM3Runtime i_runtime)
+{
+    return i_runtime->memory.isExternalMemory;
+}
 
 M3BacktraceInfo *  m3_GetBacktrace  (IM3Runtime i_runtime)
 {

@@ -1,6 +1,7 @@
 #include <cstdio>
 #include <cstring>
 #include <fstream>
+#include <array>
 
 #include "wasm3_cpp.h"
 #include "wasm/test_prog.wasm.h"
@@ -32,6 +33,36 @@ int main(void)
         runtime.load(mod);
     }
     catch(std::runtime_error &e) {
+        std::cerr << "WASM3 error: " << e.what() << std::endl;
+        return 1;
+    }
+
+    /* External memory injection: provide a fixed-size buffer for wasm linear memory */
+    try {
+        wasm3::wasm_environment env;
+        wasm3::wasm_runtime runtime = env.new_runtime(1024);
+
+        constexpr uint32_t buf_size = 64 * 1024 * 1024;
+        static std::array<uint8_t, buf_size> memory_buf{};
+
+        runtime.set_memory(memory_buf.data(), buf_size);
+
+        wasm3::wasm_module mod = env.parse_module(test_prog_wasm, test_prog_wasm_len);
+        runtime.load(mod);
+
+        mod.link("*", "sum", sum);
+        mod.link("*", "ext_memcpy", ext_memcpy);
+
+        uint32_t mem_size = 0;
+        uint8_t *mem = runtime.get_memory(&mem_size);
+        std::cout << "external memory: " << mem_size << " bytes, is_external: "
+                  << runtime.is_external_memory() << std::endl;
+
+        wasm3::wasm_function test_fn = runtime.find_function("test");
+        auto res = test_fn.call<int>(20, 10);
+        std::cout << "result with external memory: " << res << std::endl;
+    }
+    catch(wasm3::error &e) {
         std::cerr << "WASM3 error: " << e.what() << std::endl;
         return 1;
     }

@@ -230,6 +230,41 @@ namespace wasm3 {
          */
         wasm_function find_function(const char *name);
 
+        /**
+         * Inject an externally-managed memory buffer
+         *
+         * The caller owns the buffer lifetime. wasm3 will not free it.
+         *
+         * @param buffer  pointer to the memory buffer
+         * @param buffer_size  size of the buffer in bytes
+         * @param page_size  wasm page size in bytes (0 for default)
+         * @return pointer to the data region
+         */
+        uint8_t * set_memory(void *buffer, uint32_t buffer_size, uint32_t page_size = 0);
+
+        /**
+         * Get a pointer to the wasm linear memory
+         *
+         * @param out_size  if not NULL, receives the size in bytes
+         * @param memory_index  memory index (usually 0)
+         * @return pointer to the linear memory data
+         */
+        uint8_t * get_memory(uint32_t *out_size = nullptr, uint32_t memory_index = 0);
+
+        /**
+         * Get the size of the wasm linear memory in bytes
+         *
+         * @return size in bytes
+         */
+        uint32_t get_memory_size();
+
+        /**
+         * Check if the runtime uses external memory
+         *
+         * @return true if memory was set via set_memory()
+         */
+        bool is_external_memory() const;
+
     protected:
         friend class wasm_environment;
 
@@ -415,6 +450,26 @@ namespace wasm3 {
 
     inline wasm_function wasm_runtime::find_function(const char *name) {
         return wasm_function(m_runtime, name);
+    }
+
+    inline uint8_t * wasm_runtime::set_memory(void *buffer, uint32_t buffer_size, uint32_t page_size) {
+        uint8_t *result = m3_SetMemory(m_runtime.get(), buffer, buffer_size, page_size);
+        if (result == nullptr) {
+            throw error("failed to set external memory");
+        }
+        return result;
+    }
+
+    inline uint8_t * wasm_runtime::get_memory(uint32_t *out_size, uint32_t memory_index) {
+        return m3_GetMemory(m_runtime.get(), out_size, memory_index);
+    }
+
+    inline uint32_t wasm_runtime::get_memory_size() {
+        return m3_GetMemorySize(m_runtime.get());
+    }
+
+    inline bool wasm_runtime::is_external_memory() const {
+        return m3_IsExternalMemory(m_runtime.get());
     }
 
     template<typename Func>

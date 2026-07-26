@@ -237,6 +237,8 @@ d_m3ErrorConst  (trapStackOverflow,             "[trap] stack overflow")
                                                      uint32_t               i_bufferSize,
                                                      uint32_t               i_pageSize);
 
+    int                  m3_IsExternalMemory         (IM3Runtime             i_runtime);
+
     void *              m3_GetUserData              (IM3Runtime             i_runtime);
 
 
