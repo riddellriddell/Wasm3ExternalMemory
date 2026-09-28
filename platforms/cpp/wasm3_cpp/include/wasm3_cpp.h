@@ -338,7 +338,7 @@ namespace wasm3 {
             M3Result err = m3_ParseModule(env, &p, data, static_cast<uint32_t>(size));
             detail::check_error(err);
             m_module.reset(p, [this](IM3Module module) {
-                if (!m_loaded) {
+                if (!*m_loaded) {
                     m3_FreeModule(module);
                 }
             });
@@ -347,13 +347,13 @@ namespace wasm3 {
         void load_into(IM3Runtime runtime) {
             M3Result err = m3_LoadModule(runtime, m_module.get());
             detail::check_error(err);
-            m_loaded = true;
+            *m_loaded = true;
         }
 
 
         std::shared_ptr<M3Environment> m_env;
         std::shared_ptr<M3Module> m_module;
-        bool m_loaded = false;
+        std::shared_ptr<bool> m_loaded = std::shared_ptr<bool>(false);
         std::vector<uint8_t> m_moduleRawData {};
     };
 
