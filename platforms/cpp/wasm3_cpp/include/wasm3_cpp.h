@@ -353,7 +353,7 @@ namespace wasm3 {
 
         std::shared_ptr<M3Environment> m_env;
         std::shared_ptr<M3Module> m_module;
-        std::shared_ptr<bool> m_loaded = std::shared_ptr<bool>(false);
+        std::shared_ptr<bool> m_loaded = std::make_shared<bool>(false);
         std::vector<uint8_t> m_moduleRawData {};
     };
 
